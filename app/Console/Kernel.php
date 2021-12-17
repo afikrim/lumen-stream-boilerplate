@@ -13,11 +13,6 @@ class Kernel extends ConsoleKernel
      * @var array
      */
     protected $commands = [
-        \App\Console\Commands\Stream\DeclareGroupCommand::class,
-        \App\Console\Commands\Stream\DestroyGroupCommand::class,
-        \App\Console\Commands\Stream\AddCommand::class,
-        \App\Console\Commands\Stream\DelCommand::class,
-        \App\Console\Commands\Stream\ConsumeCommand::class,
     ];
 
     /**
