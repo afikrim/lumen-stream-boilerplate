@@ -10,7 +10,10 @@ use Illuminate\Support\Str;
 class ConsumeCommand extends Command
 {
     protected $signature = 'stream:consume
-                            {key : Specified stream key}';
+                            {key : Specified stream key}
+                            {--count=5 : A number of event that will retrieve}
+                            {--block=2000 : Blocking timeout of reading command in milis}
+                            {--rest=3 : Delay between each read in seconds}';
 
     protected $description = 'Destroy an object from the stream';
 
@@ -21,63 +24,112 @@ class ConsumeCommand extends Command
             return;
         }
 
-        $group = Str::slug(config('app.env') . '_' . config('app.name') . '_group', '_');
-        $consumer = Str::slug(config('app.env') . '_' . config('app.name') . '_consumer', '_');
-
         try {
             // create consumer group
             Artisan::call('stream:declare-group', [
                 'key' => $this->argument('key'),
-                'group' => $group,
+                'group' => $this->getGroup(),
             ]);
         } catch (\Exception$e) {
             // do nothing
         }
 
+        while (true) {
+            $result = $this->readStream();
+            if (!$result) {
+                continue;
+            }
+
+            $objects = $this->parseResult($result);
+
+            $objects->each(function ($object) {
+                $this->processData($object);
+
+                $this->ackStream($object->id);
+            });
+
+            $this->rest();
+        }
+    }
+
+    protected function parseResult(array $result)
+    {
+        $objects = collect($result[0][1])
+            ->map(function ($result) {
+                $object = collect($result)
+                    ->reduce(function ($prev, $raw, $index) {
+                        if ($index === 0) {
+                            $prev->id = $raw;
+                            return $prev;
+                        }
+
+                        [$field, $value] = $raw;
+                        $prev->{$field} = $value;
+
+                        return $prev;
+                    }, new \stdClass());
+
+                return $object;
+            });
+
+        return $objects;
+    }
+
+    protected function processData(\stdClass$data)
+    {
+        // Write your handle here.
+        echo json_encode($data, JSON_PRETTY_PRINT) . "\n";
+    }
+
+    protected function getGroup()
+    {
+        return env('STREAM_GROUP', Str::slug(config('app.env') . '_' . config('app.name') . '_group', '_'));
+    }
+
+    protected function getConsumer()
+    {
+        return env('STREAM_CONSUMER', Str::slug(config('app.env') . '_' . config('app.name') . '_consumer', '_'));
+    }
+
+    private function readStream()
+    {
         $result = Redis::executeRaw(
             [
                 'XREADGROUP',
                 'GROUP',
-                $group,
-                $consumer,
+                $this->getGroup(),
+                $this->getConsumer(),
                 'BLOCK',
-                '0',
+                $this->option('block'),
                 'COUNT',
-                '1',
+                $this->option('count'),
                 'STREAMS',
                 $this->argument('key'),
                 '>',
             ]
         );
 
-        if (is_string($result)) {
+        if ($result && is_string($result)) {
             throw new \Exception($result);
         }
 
-        $data = $this->parseResult($result);
-        $result = Redis::executeRaw(
+        return $result;
+    }
+
+    private function ackStream($id)
+    {
+        $_ack = Redis::executeRaw(
             [
                 'XACK',
                 $this->argument('key'),
-                $group,
-                $data->id,
+                $this->getGroup(),
+                $id,
             ]
         );
-
-        echo json_encode($data, JSON_PRETTY_PRINT);
     }
 
-    protected function parseResult(array $result) {
-        $data = new \stdClass();
-        foreach($result[0][1][0] as $index => $value) {
-            if ($index === 0) {
-                $data->id = $value;
-                continue;
-            }
-
-            $data->{$value[0]} = $value[1];
-        }
-
-        return $data;
+    private function rest()
+    {
+        sleep($this->option('rest'));
     }
 }

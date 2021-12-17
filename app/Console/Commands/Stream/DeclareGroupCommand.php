@@ -9,7 +9,8 @@ class DeclareGroupCommand extends Command
 {
     protected $signature = 'stream:declare-group
                             {key : The name of the stream}
-                            {group : The name of the consumer group}';
+                            {group : The name of the consumer group}
+                            {--id=$ : The ID that will be add to consumer group}';
 
     protected $description = 'Declare a stream group';
 
@@ -25,7 +26,7 @@ class DeclareGroupCommand extends Command
             'CREATE',
             $this->argument('key'),
             $this->argument('group'),
-            '$',
+            $this->option('id'),
             'MKSTREAM',
         ]);
 
