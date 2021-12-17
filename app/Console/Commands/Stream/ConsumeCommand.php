@@ -10,7 +10,7 @@ use Illuminate\Support\Str;
 class ConsumeCommand extends Command
 {
     protected $signature = 'stream:consume
-                            {key : Specified stream key}
+                            {key* : Specified stream key}
                             {--count=5 : A number of event that will retrieve}
                             {--block=2000 : Blocking timeout of reading command in milis}
                             {--rest=3 : Delay between each read in seconds}';
@@ -40,45 +40,52 @@ class ConsumeCommand extends Command
                 continue;
             }
 
-            $objects = $this->parseResult($result);
+            $data = $this->parseResult($result);
 
-            $objects->each(function ($object) {
-                $this->processData($object);
+            $data->each(function ($d) {
+                ['key' => $key, 'models' => $models] = $d;
 
-                $this->ackStream($object->id);
+                $models->each(function ($model) use ($key) {
+                    $this->processData($key, $model);
+
+                    $this->ackStream($key, $model['id']);
+                });
             });
 
             $this->rest();
         }
     }
 
-    protected function parseResult(array $result)
+    protected function parseResult(array $results)
     {
-        $objects = collect($result[0][1])
-            ->map(function ($result) {
-                $object = collect($result)
-                    ->reduce(function ($prev, $raw, $index) {
-                        if ($index === 0) {
-                            $prev->id = $raw;
-                            return $prev;
+        $data = collect($results)
+            ->reduce(function ($prev, $result) {
+                [$key, $rawModels] = $result;
+
+                $models = collect($rawModels)
+                    ->map(function ($rawModel) {
+                        [$id, $rawModelFields] = $rawModel;
+
+                        $object = [];
+                        for ($i = 0; $i < count($rawModelFields); $i += 2) {
+                            $object["{$rawModelFields[$i]}"] = $rawModelFields[$i + 1];
                         }
 
-                        [$field, $value] = $raw;
-                        $prev->{$field} = $value;
+                        return array_merge(['id' => $id], $object);
+                    });
 
-                        return $prev;
-                    }, new \stdClass());
+                return array_merge(
+                    [['key' => $key, 'models' => $models]], $prev
+                );
+            }, []);
 
-                return $object;
-            });
-
-        return $objects;
+        return collect($data);
     }
 
-    protected function processData(\stdClass$data)
+    protected function processData($key, array $data)
     {
         // Write your handle here.
-        echo json_encode($data, JSON_PRETTY_PRINT) . "\n";
+        echo "{$key}\n" . json_encode($data, JSON_PRETTY_PRINT) . "\n";
     }
 
     protected function getGroup()
@@ -93,6 +100,11 @@ class ConsumeCommand extends Command
 
     private function readStream()
     {
+        $ids = [];
+        foreach ($this->argument('key') as $key) {
+            $ids[] = '>';
+        }
+
         $result = Redis::executeRaw(
             [
                 'XREADGROUP',
@@ -104,8 +116,8 @@ class ConsumeCommand extends Command
                 'COUNT',
                 $this->option('count'),
                 'STREAMS',
-                $this->argument('key'),
-                '>',
+                ...$this->argument('key'),
+                ...$ids,
             ]
         );
 
@@ -116,12 +128,12 @@ class ConsumeCommand extends Command
         return $result;
     }
 
-    private function ackStream($id)
+    private function ackStream($key, $id)
     {
         $_ack = Redis::executeRaw(
             [
                 'XACK',
-                $this->argument('key'),
+                $key,
                 $this->getGroup(),
                 $id,
             ]
